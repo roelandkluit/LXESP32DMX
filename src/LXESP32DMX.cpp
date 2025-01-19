@@ -30,8 +30,9 @@
 // Set to use UART based hardware DMX Break
 #define HARDWARE_DMX_BREAK 1
 
-#define SEMAPHORE_TIMEOUT 50
+#define SEMAPHORE_TIMEOUT 500
 #define SEMAPHORE_TIMEOUT_STATEMENT (TickType_t)(portTICK_PERIOD_MS * SEMAPHORE_TIMEOUT)
+#define xSemaphoreRelease( xSemaphore ) xQueueGenericSend( ( QueueHandle_t ) ( xSemaphore ), NULL, SEMAPHORE_TIMEOUT, queueSEND_TO_BACK )
 
 #if DO_NO_CREATE_DEFAULT_LXESP32DMX_CLASS_OBJECT != 1
   LX32DMX ESP32DMX;
@@ -65,9 +66,18 @@ void LX32DMX::send_dmx_task( void * param )
 	  if (xSemaphoreTake(dmx->lxDataLock, SEMAPHORE_TIMEOUT_STATEMENT) == pdTRUE)
 	  {
 		  dmx->pLXSerial->writeBytesWithBreak(dmx->dmxData(), dmx->numberOfSlots() + 1);
-		  xSemaphoreGive(dmx->lxDataLock);
+		  BaseType_t releaseResult = xSemaphoreRelease(dmx->lxDataLock);
 		  hardwareSerialDelayMicroseconds(5);// minimum MAB 12µs (see timing test above)
+		  //Added check for correct release of Lock, prevents deadlock
+		  if (releaseResult != pdTRUE)
+		  {
+			  while (!xSemaphoreRelease(dmx->lxDataLock) == pdTRUE)
+			  {
+				  vTaskDelay(1);
+			  }
+		  }		  
 	  }
+	  vTaskDelay(23);
 	// ********** end alt?
 #else
 	/*
@@ -146,14 +156,14 @@ void LX32DMX::read_queue_task(void *param)
 					dmx->pLXSerial->clearFIFOOverflow();
 					dmx->pLXSerial->flushInput();
                     xQueueReset(dmx->uart_queue);
-            		Serial.println("fifo over");
+            		//Serial.println("fifo over");
 					dmx->initial_break = false;
             		break;
             	default:					// error?
 					dmx->pLXSerial->flushInput();
                     xQueueReset(dmx->uart_queue);
-            		Serial.print("other event ");
-            		Serial.println(event.type);
+            		//Serial.print("other event ");
+            		//Serial.println(event.type);
 					dmx->initial_break = false;
 					break;
             }	// switch
@@ -252,14 +262,14 @@ void LX32DMX::rdm_queue_task(void *param)
             		dmx->pLXSerial->clearFIFOOverflow();
             		dmx->pLXSerial->flushInput();
                     xQueueReset(dmx->uart_queue);
-            		Serial.println("fifo over");
+            		//Serial.println("fifo over");
 					dmx->initial_break = false;
             		break;
             	default:					// error?
             		dmx->pLXSerial->flushInput();
                     xQueueReset(dmx->uart_queue);
-            		Serial.print("other event ");
-            		Serial.println(event.type);
+            		//Serial.print("other event ");
+            		//Serial.println(event.type);
 					dmx->initial_break = false;
             		
             
@@ -300,8 +310,11 @@ void LX32DMX::rdm_queue_task(void *param)
 					{
 						//xSemaphoreTake( dmx->lxDataLock, portMAX_DELAY );
 						dmx->pLXSerial->writeBytesWithBreak(dmx->dmxData(), dmx->numberOfSlots() + 1);
-						xSemaphoreGive(dmx->lxDataLock);
 						hardwareSerialDelayMicroseconds(1);
+						while (!xSemaphoreRelease(dmx->lxDataLock))
+						{
+							vTaskDelay(1);						
+						}
 						if (task_mode == DMX_TASK_SET_SEND)
 						{
 							dmx->_setTaskModeSend();
@@ -760,7 +773,10 @@ void LX32DMX::handleQueuePacketComplete( void ) {
 				{
 					//xSemaphoreTake(this->lxDataLock, portMAX_DELAY );	// double buffer makes task conflict unlikely, but use mutex anyway
 					memcpy(_dmxData, _receivedData, DMX_MAX_FRAME);
-					xSemaphoreGive(this->lxDataLock);
+					while (!xSemaphoreRelease(this->lxDataLock) == pdTRUE)
+					{
+						vTaskDelay(10);
+					}						
 					_slots = _current_slot;
 					setInputReceivedTaskStatus(RECEIVE_STATUS_DMX);
 				}
@@ -771,7 +787,10 @@ void LX32DMX::handleQueuePacketComplete( void ) {
 			if (xSemaphoreTake(this->lxDataLock, SEMAPHORE_TIMEOUT_STATEMENT) == pdTRUE)
 			{
 				uint8_t plen = _receivedData[i + 2] + 2;
-				xSemaphoreGive(this->lxDataLock);
+				while (!xSemaphoreRelease(this->lxDataLock) == pdTRUE)
+				{
+					vTaskDelay(10);
+				}
 				for (int j = 0; j < plen; j++) {
 					_rdmData[j] = _receivedData[j + i];
 				}
@@ -1069,11 +1088,11 @@ uint8_t LX32DMX::sendRDMDiscoveryMute(UID target, uint8_t cmd) {
 						rv = 1;
 					}
 				}
-			} else {
-				Serial.println("fail ACK");
+			//} else {
+			//	Serial.println("fail ACK");
 			}
-		} else {
-			Serial.println("fail validate");
+		//} else {
+		//	Serial.println("fail validate");
 		}
 		
 		_rdm_read_handled = ALLOW_DATA_HANDLING;
@@ -1099,14 +1118,14 @@ uint8_t LX32DMX::sendRDMControllerPacket( void ) {
 				_rdmData[rv] = _receivedData[rv];
 			}
 			rv = 1;
-		} else {
-		    Serial.println("fail controller packet: not valid");
+		//} else {
+		    //Serial.println("fail controller packet: not valid");
 		}
 		_rdm_read_handled = ALLOW_DATA_HANDLING;
 		resetFrame();
 	} else {
 		_rdm_read_handled = ALLOW_DATA_HANDLING;
-		Serial.println("fail controller packet: no response");
+		//Serial.println("fail controller packet: no response");
 	}
 	
 	restoreTaskSendDMX();
@@ -1139,12 +1158,12 @@ uint8_t LX32DMX::sendRDMGetCommand(UID target, uint16_t pid, uint8_t* info, uint
 					}
 				}
 			}
-		} else {
-			Serial.println("get fail: ACK");
+		//} else {
+			//Serial.println("get fail: ACK");
 		}
 		
-	} else {
-		Serial.println("get fail: no valid response");
+	//} else {
+		//Serial.println("get fail: no valid response");
 	}
 	
 	return rv;
@@ -1169,11 +1188,11 @@ uint8_t LX32DMX::sendRDMSetCommand(UID target, uint16_t pid, uint8_t* info, uint
 					rv = 1;
 				}
 			}
-		} else {
-			Serial.println("fail ACK");
+		//} else {
+			//Serial.println("fail ACK");
 		}
-	} else {
-		Serial.println("no valid response");
+	//} else {
+		//Serial.println("no valid response");
 	}
 	
 	return rv;

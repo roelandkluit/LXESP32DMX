@@ -182,7 +182,7 @@ void IRAM_ATTR uartWaitFIFOEmpty(uart_t* uart) {
         }
         hardwareSerialDelayMicroseconds(10);
     }
-	uart_wait_tx_done(uart->num, portMAX_DELAY);
+	uart_wait_tx_done((uart_port_t)uart->num, portMAX_DELAY);
 }
 
 void IRAM_ATTR uartWaitTXDone(uart_t* uart) {
@@ -190,21 +190,21 @@ void IRAM_ATTR uartWaitTXDone(uart_t* uart) {
 		return;
 	}
     
-   uart_wait_tx_done(uart->num, portMAX_DELAY);
-   uart_clear_intr_status(uart->num, UART_INTR_TX_DONE);
+   uart_wait_tx_done(uart_port_t(uart->num), portMAX_DELAY);
+   uart_clear_intr_status(uart_port_t(uart->num), UART_INTR_TX_DONE);
    //uart->dev->int_clr.tx_done = 1;
 }
 
 void uartDisableInterrupts(uart_t* uart) {
     UART_MUTEX_LOCK();
-    uart_disable_intr_mask(uart->num, 0xffffffff);
-    uart_clear_intr_status(uart->num, 0xffffffff);
+    uart_disable_intr_mask((uart_port_t)uart->num, 0xffffffff);
+    uart_clear_intr_status((uart_port_t)uart->num, 0xffffffff);
     UART_MUTEX_UNLOCK();
 }
 
 void uartSetInterrupts(uart_t* uart, uint32_t value) {
 	UART_MUTEX_LOCK();
-	uart_enable_intr_mask(uart->num, value);
+	uart_enable_intr_mask((uart_port_t)uart->num, value);
 	UART_MUTEX_UNLOCK();
 }
 
@@ -252,7 +252,7 @@ uart_t* uartQueueBegin(uint8_t uart_nr, uint32_t baudrate, uint32_t config, int8
     
     /* continue with copy of regular uartBegin() until uart_driver_install */
 
-    if (uart_is_driver_installed(uart_nr)) {
+    if (uart_is_driver_installed((uart_port_t)uart_nr)) {
         uartEnd(uart_nr);   //we just installed a driver and now we will uninstall it
     }
 
@@ -268,6 +268,8 @@ uart_t* uartQueueBegin(uint8_t uart_nr, uint32_t baudrate, uint32_t config, int8
     UART_MUTEX_LOCK();
 
     uart_config_t uart_config;
+    memset(&uart_config, 0, sizeof(uart_config_t));
+    uart_config.flags.backup_before_sleep = false;  // new flag from IDF v5.3
     uart_config.baud_rate = _get_effective_baudrate(baudrate);
     uart_config.data_bits = (uart_word_length_t)((config & 0xc) >> 2);
     uart_config.parity = (uart_parity_t)(config & 0x3);
@@ -291,21 +293,21 @@ uart_t* uartQueueBegin(uint8_t uart_nr, uint32_t baudrate, uint32_t config, int8
       or, with send writeBytesWithBreak does not return until after the break has been sent
 */
 
-    ESP_ERROR_CHECK(uart_driver_install(uart_nr, rx_buf_sz, 0, qSize, q, 0));
+    ESP_ERROR_CHECK(uart_driver_install((uart_port_t)uart_nr, rx_buf_sz, 0, qSize, q, 0));
     
 /****** continue with regular uartBegin() ******/
     
-    ESP_ERROR_CHECK(uart_param_config(uart_nr, &uart_config));
-    ESP_ERROR_CHECK(uart_set_pin(uart_nr, txPin, rxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_param_config((uart_port_t)uart_nr, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin((uart_port_t)uart_nr, txPin, rxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
     // Is it right or the idea is to swap rx and tx pins? 
     if (inverted) {
         // invert signal for both Rx and Tx
-        ESP_ERROR_CHECK(uart_set_line_inverse(uart_nr, UART_SIGNAL_TXD_INV | UART_SIGNAL_RXD_INV));    
+        ESP_ERROR_CHECK(uart_set_line_inverse((uart_port_t)uart_nr, UART_SIGNAL_TXD_INV | UART_SIGNAL_RXD_INV));
     }
 
     // Set RS485 half duplex mode on UART.  This shall force flush to wait up to sending all bits out
-    ESP_ERROR_CHECK(uart_set_mode(uart_nr, UART_MODE_RS485_HALF_DUPLEX));
+    ESP_ERROR_CHECK(uart_set_mode((uart_port_t)uart_nr, UART_MODE_RS485_HALF_DUPLEX));
 
     UART_MUTEX_UNLOCK();
 
@@ -367,11 +369,11 @@ void LXHardwareSerial::sendBreak(uint32_t length) {
 void LXHardwareSerial::writeBytesWithBreak(const void* src, size_t size) {
 	//  //int uart_write_bytes_with_break(uart_port_t uart_num, const void* src, size_t size, int brk_len);
 	//bit period 4μs break 176μs typical break = 44 bit periods for break
-    uart_write_bytes_with_break(_uart->num, src, size, 44);	
+    uart_write_bytes_with_break((uart_port_t)_uart->num, src, size, 44);
 }
 
 int LXHardwareSerial::readBytes(void* buf, uint32_t length, TickType_t ticks_to_wait) {
-	int r = uart_read_bytes(_uart->num, buf, length, ticks_to_wait);
+	int r = uart_read_bytes((uart_port_t)_uart->num, buf, length, ticks_to_wait);
 	return r;
 }
 
@@ -380,27 +382,27 @@ void LXHardwareSerial::setBaudRate(uint32_t rate) {
 }
 
 void LXHardwareSerial::setToTwoStopBits() {
-	uart_set_stop_bits(_uart->num, UART_STOP_BITS_2);
+	uart_set_stop_bits((uart_port_t)_uart->num, UART_STOP_BITS_2);
 }
 
 void LXHardwareSerial::enableBreakDetect(void) {
-	uart_enable_intr_mask(_uart->num, UART_INTR_BRK_DET);
+	uart_enable_intr_mask((uart_port_t)_uart->num, UART_INTR_BRK_DET);
 }
 
 void LXHardwareSerial::disableBreakDetect() {
-	uart_disable_intr_mask(_uart->num, UART_INTR_BRK_DET);
+	uart_disable_intr_mask((uart_port_t)_uart->num, UART_INTR_BRK_DET);
 }
 
 void LXHardwareSerial::clearInterrupts() {
-	uart_clear_intr_status(_uart->num, 0xffffffff);
+	uart_clear_intr_status((uart_port_t)_uart->num, 0xffffffff);
 }
 
 void LXHardwareSerial::clearFIFOOverflow() {
-	uart_clear_intr_status(_uart->num, UART_INTR_RXFIFO_OVF);
+	uart_clear_intr_status((uart_port_t)_uart->num, UART_INTR_RXFIFO_OVF);
 }
 
 void LXHardwareSerial::flushInput() {
-	uart_flush_input(_uart->num);
+	uart_flush_input((uart_port_t)_uart->num);
 }
 
 void LXHardwareSerial::begin(unsigned long baud, uint32_t config, int8_t rxPin, int8_t txPin, bool invert, unsigned long timeout_ms, uint8_t rxfifo_full_thrhd, int qSize, QueueHandle_t* q) {
